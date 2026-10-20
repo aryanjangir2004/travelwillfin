@@ -1,0 +1,17 @@
+[Unit]
+Description=Finndex editor save API
+After=network.target
+
+[Service]
+User=finndex
+Group=finndex
+ExecStart=/usr/bin/python3 /opt/finndex/finndex_api.py --data /var/lib/finndex/data.json
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/finndex
+
+[Install]
+WantedBy=multi-user.target
