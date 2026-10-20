@@ -12,6 +12,7 @@ Manage logins from this folder:
 
 ```sh
 ./deploy/editors.sh add sam       # you type Sam's password twice
+./deploy/editors.sh temp sam      # makes a random password and prints it
 ./deploy/editors.sh remove sam
 ./deploy/editors.sh list
 ```
