@@ -35,8 +35,10 @@
   footer { font-size: 11px; color: var(--muted); margin-top: 12px; }
   footer a { color: var(--link); text-decoration: none; }
   .tip {
-    position: fixed; z-index: 10; pointer-events: none;
-    max-width: 280px; padding: 10px 12px;
+    /* Page coordinates + counter-scale, so it stays readable when the page is pinch-zoomed. */
+    position: absolute; top: 0; left: 0; z-index: 10; pointer-events: none;
+    transform-origin: 0 0;
+    width: max-content; max-width: min(280px, calc(100vw - 16px)); padding: 10px 12px;
     background: #fff; border: 1px solid var(--border); border-radius: 4px;
     box-shadow: 0 2px 10px rgba(0,0,0,.12);
     font-size: 13px; line-height: 1.45;
@@ -107,16 +109,31 @@
     .attr("role", "img")
     .attr("aria-label", "World map coloured by Finndex score");
 
-  let active = null;
+  let active = null, anchor = null;
+
+  // The visible part of the page, in page coordinates, plus the pinch-zoom level.
+  function viewport() {
+    const vv = window.visualViewport;
+    return vv ? { x: vv.pageLeft, y: vv.pageTop, w: vv.width, h: vv.height, s: vv.scale }
+              : { x: window.scrollX, y: window.scrollY, w: window.innerWidth, h: window.innerHeight, s: 1 };
+  }
 
   function place(event) {
-    const pad = 14;
-    const r = tip.getBoundingClientRect();
-    let x = event.clientX + pad, y = event.clientY + pad;
-    if (x + r.width > window.innerWidth - 8) x = event.clientX - r.width - pad;
-    if (y + r.height > window.innerHeight - 8) y = event.clientY - r.height - pad;
-    tip.style.left = Math.max(8, x) + "px";
-    tip.style.top = Math.max(8, y) + "px";
+    if (event) anchor = { x: event.pageX, y: event.pageY };
+    if (!anchor) return;
+    const v = viewport();
+    // Shrink by the zoom level so the box shows at normal size next to the finger.
+    const k = 1 / v.s;
+    tip.style.transform = `scale(${k})`;
+    const w = tip.offsetWidth * k, h = tip.offsetHeight * k;
+    const pad = 14 * k, edge = 8 * k;
+    let x = anchor.x + pad, y = anchor.y + pad;
+    if (x + w > v.x + v.w - edge) x = anchor.x - w - pad;
+    if (y + h > v.y + v.h - edge) y = anchor.y - h - pad;
+    x = Math.max(v.x + edge, Math.min(x, v.x + v.w - w - edge));
+    y = Math.max(v.y + edge, y);
+    tip.style.left = x + "px";
+    tip.style.top = y + "px";
   }
 
   function show(event, f, node) {
@@ -161,7 +178,12 @@
     });
 
   document.addEventListener("click", hide);
-  window.addEventListener("scroll", hide, { passive: true });
+  // Keep the box attached to the country, at normal size, while the user zooms or pans.
+  if (window.visualViewport) {
+    for (const type of ["resize", "scroll"]) {
+      window.visualViewport.addEventListener(type, () => { if (tip.classList.contains("show")) place(); });
+    }
+  }
 })();
 </script>
 </body>
