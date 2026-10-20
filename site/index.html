@@ -27,10 +27,14 @@
   .legend .bar { height: 12px; }
   .legend .ticks { display: flex; justify-content: space-between; font-size: 11px; margin-top: 2px; }
   .map { position: relative; width: 100%; }
-  .map svg { display: block; width: 100%; height: auto; touch-action: manipulation; }
+  .map svg { display: block; width: 100%; height: auto; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   .country { stroke: var(--stroke); stroke-width: 0.4; cursor: pointer; }
   .country.nodata { fill: var(--nodata); cursor: default; }
   .country.active { stroke: #181818; stroke-width: 1.2; }
+  .dot { cursor: pointer; }
+  .dot .hit { fill: transparent; }
+  .dot .mark { stroke: var(--stroke); stroke-width: 0.8; }
+  .dot.active .mark { stroke: #181818; stroke-width: 1.2; }
   .hint { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
   footer { font-size: 11px; color: var(--muted); margin-top: 12px; }
   footer a { color: var(--link); text-decoration: none; }
@@ -109,7 +113,7 @@
     .attr("role", "img")
     .attr("aria-label", "World map coloured by Finndex score");
 
-  let active = null, anchor = null;
+  let active = null, anchor = null, lastPointer = "mouse";
 
   // The visible part of the page, in page coordinates, plus the pinch-zoom level.
   function viewport() {
@@ -161,22 +165,81 @@
     active = null;
   }
 
-  svg.append("g")
+  function interactive(sel) {
+    return sel
+      .on("pointerenter", function (event, f) { if (event.pointerType === "mouse") show(event, f, this); })
+      .on("pointermove", function (event) { if (event.pointerType === "mouse" && active === this) place(event); })
+      .on("pointerleave", function (event) { if (event.pointerType === "mouse") hide(); })
+      .on("click", function (event, f) {
+        event.stopPropagation();
+        if (active === this && lastPointer !== "mouse") return hide();
+        show(event, f, this);
+      });
+  }
+
+  interactive(svg.append("g")
     .selectAll("path")
     .data(features)
     .join("path")
     .attr("d", path)
     .attr("class", f => rowFor(f) ? "country" : "country nodata")
-    .attr("fill", f => { const d = rowFor(f); return d ? color(d.score) : null; })
-    .on("pointerenter", function (event, f) { if (event.pointerType === "mouse") show(event, f, this); })
-    .on("pointermove", function (event) { if (event.pointerType === "mouse" && active === this) place(event); })
-    .on("pointerleave", function (event) { if (event.pointerType === "mouse") hide(); })
-    .on("click", function (event, f) {
-      event.stopPropagation();
-      if (active === this && event.pointerType !== "mouse") return hide();
-      show(event, f, this);
-    });
+    .attr("fill", f => { const d = rowFor(f); return d ? color(d.score) : null; }));
 
+  // Countries too small to tap get a dot on their main island, with a bigger invisible tap area.
+  const SMALL_AREA = 6;
+  const largest = new Map();
+  for (const f of features) {
+    const d = rowFor(f);
+    if (!d) continue;
+    const a = path.area(f), cur = largest.get(d.code);
+    if (!cur || a > cur.a) largest.set(d.code, { f, a });
+  }
+  function mainCentroid(f) {
+    if (f.geometry.type !== "MultiPolygon") return path.centroid(f);
+    let best = null, bestArea = -1;
+    for (const coordinates of f.geometry.coordinates) {
+      const poly = { type: "Polygon", coordinates };
+      const a = path.area(poly);
+      if (a > bestArea) { bestArea = a; best = poly; }
+    }
+    return path.centroid(best);
+  }
+  const small = [...largest.values()]
+    .filter(x => x.a < SMALL_AREA)
+    .map(x => ({ f: x.f, at: mainCentroid(x.f) }))
+    .filter(x => x.at.every(Number.isFinite));
+
+  // Nudge clustered dots (Caribbean, Hong Kong/Macao) apart so each one can be tapped.
+  const MIN_GAP = 7;
+  for (let pass = 0; pass < 60; pass++) {
+    for (let i = 0; i < small.length; i++) {
+      for (let j = i + 1; j < small.length; j++) {
+        const a = small[i].at, b = small[j].at;
+        const dx = b[0] - a[0], dy = b[1] - a[1], d = Math.hypot(dx, dy);
+        if (d >= MIN_GAP) continue;
+        const push = (MIN_GAP - d) / 2;
+        const ux = d ? dx / d : Math.cos(i), uy = d ? dy / d : Math.sin(i);
+        a[0] -= ux * push; a[1] -= uy * push;
+        b[0] += ux * push; b[1] += uy * push;
+      }
+    }
+  }
+
+  const dots = svg.append("g")
+    .selectAll("g")
+    .data(small.map(x => x.f))
+    .join("g")
+    .attr("class", "dot")
+    .attr("transform", (f, i) => `translate(${small[i].at})`);
+  // Tap area up to 8 units, but never reaching into a neighbouring dot's area.
+  const hitRadius = small.map((a, i) => small.reduce((r, b, j) =>
+    i === j ? r : Math.min(r, Math.hypot(a.at[0] - b.at[0], a.at[1] - b.at[1]) / 2), 8));
+  dots.append("circle").attr("class", "hit").attr("r", (f, i) => hitRadius[i]);
+  dots.append("circle").attr("class", "mark").attr("r", 3).attr("fill", f => color(rowFor(f).score));
+  interactive(dots);
+
+  // iOS reports taps as "mouse" clicks, so remember what the finger/mouse really was.
+  document.addEventListener("pointerdown", e => { lastPointer = e.pointerType; }, true);
   document.addEventListener("click", hide);
   // Keep the box attached to the country, at normal size, while the user zooms or pans.
   if (window.visualViewport) {
