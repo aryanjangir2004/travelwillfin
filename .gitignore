@@ -1,0 +1,4 @@
+# The repo is public: keep Finn's spreadsheet and the generated data out of git.
+*.xlsx
+site/data.json
+.DS_Store
