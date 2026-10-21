@@ -27,7 +27,23 @@
   .legend .bar { height: 12px; }
   .legend .ticks { display: flex; justify-content: space-between; font-size: 11px; margin-top: 2px; }
   .map { position: relative; width: 100%; }
-  .map svg { display: block; width: 100%; height: auto; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  /* Pinches on the map zoom the map; one-finger drags scroll the page until it's zoomed in. */
+  .map svg { display: block; width: 100%; height: auto; touch-action: pan-x pan-y; -webkit-tap-highlight-color: transparent; }
+  .map.zoomed svg { touch-action: none; cursor: grab; }
+  .country, .dot .mark { vector-effect: non-scaling-stroke; }
+  /* Bottom-left sits over the South Pacific, where there's nothing to tap. */
+  .zoom-controls { position: absolute; left: 8px; bottom: 8px; display: flex; gap: 6px; }
+  .zoom-controls button {
+    width: 34px; height: 34px; padding: 0; border-radius: 8px;
+    border: 1px solid var(--border); background: #fff; color: var(--text);
+    font: 500 20px/1 Roboto, system-ui, sans-serif; cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0,0,0,.1); touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+  }
+  .zoom-controls button:disabled { opacity: .4; cursor: default; }
+  @media (max-width: 600px) {
+    .zoom-controls { left: 4px; bottom: 4px; gap: 4px; }
+    .zoom-controls button { width: 30px; height: 30px; font-size: 18px; }
+  }
   .country { stroke: var(--stroke); stroke-width: 0.4; cursor: pointer; }
   .country.nodata { fill: var(--nodata); cursor: default; }
   .country.active { stroke: #181818; stroke-width: 1.2; }
@@ -65,7 +81,7 @@
     <div class="ticks"><span id="legend-min">0</span><span id="legend-max">98</span></div>
   </div>
   <div class="map" id="map"></div>
-  <p class="hint">Hover over a country (or tap it on your phone) to see why.</p>
+  <p class="hint">Hover over a country (or tap it on your phone) to see why. Pinch the map or use + to zoom in.</p>
   <footer>Source: Finn McCheechan</footer>
 </main>
 <div class="tip" id="tip" role="tooltip"></div>
@@ -177,7 +193,8 @@
       });
   }
 
-  interactive(svg.append("g")
+  const layer = svg.append("g");
+  interactive(layer.append("g")
     .selectAll("path")
     .data(features)
     .join("path")
@@ -231,6 +248,7 @@
       return [...covered].every(([s, area]) => area / s.a < 0.25);
     }) }))
     .filter(x => x.landHit);
+  for (const s of small) s.base = s.at.slice();
 
   // Nudge clustered dots (Caribbean, Hong Kong/Macao) apart so each one can be tapped.
   const MIN_GAP = 7;
@@ -248,12 +266,11 @@
     }
   }
 
-  const dots = svg.append("g")
+  const dots = layer.append("g")
     .selectAll("g")
     .data(small.map(x => x.f))
     .join("g")
-    .attr("class", "dot")
-    .attr("transform", (f, i) => `translate(${small[i].at})`);
+    .attr("class", "dot");
   // Tap area up to 8 units, but never reaching into a neighbouring dot's area,
   // and shrunk where it would take taps from a neighbouring country.
   const onLand = small.map(a => ring(a.at, 3.5).some(p => landAt(p, a.code)));
@@ -268,6 +285,48 @@
   dots.append("circle").attr("class", "mark").attr("r", (f, i) => onLand[i] ? small[i].landHit - 0.5 : SEA_MARK)
     .attr("fill", f => color(rowFor(f).score));
   interactive(dots);
+
+  // Zoom the map itself, far past the browser's own page zoom: pinch, trackpad pinch or
+  // ctrl+scroll, drag to pan once zoomed, and +/−/reset buttons. Dots keep their on-screen
+  // size, and their nudges fade out as the real islands spread apart.
+  let k = 1;
+  function placeDots() {
+    dots.attr("transform", (f, i) => {
+      const { at, base } = small[i];
+      return `translate(${base[0] + (at[0] - base[0]) / k},${base[1] + (at[1] - base[1]) / k}) scale(${1 / k})`;
+    });
+  }
+  placeDots();
+
+  const MAX_ZOOM = 40;
+  const zoom = d3.zoom()
+    .scaleExtent([1, MAX_ZOOM])
+    .extent([[0, 0], [width, height]])
+    .translateExtent([[0, 0], [width, height]])
+    .filter(event => {
+      if (event.type === "wheel") return event.ctrlKey; // plain scrolling still scrolls the page
+      if (event.type === "touchstart") return event.touches.length > 1 || k > 1;
+      return !event.button;
+    })
+    .on("zoom", event => {
+      const t = event.transform;
+      if (t.k !== k) { k = t.k; placeDots(); }
+      layer.attr("transform", t);
+      mapEl.classList.toggle("zoomed", k > 1);
+      zoomOut.property("disabled", k <= 1);
+      zoomIn.property("disabled", k >= MAX_ZOOM);
+      reset.property("disabled", k <= 1);
+      hide(); // the box's anchor point has moved
+    });
+  svg.call(zoom);
+
+  const controls = d3.select(mapEl).append("div").attr("class", "zoom-controls");
+  const button = (label, title, fn) => controls.append("button")
+    .attr("type", "button").attr("aria-label", title).attr("title", title).text(label)
+    .on("click", event => { event.stopPropagation(); fn(svg.transition().duration(250)); });
+  const zoomIn = button("+", "Zoom in", t => zoom.scaleBy(t, 2));
+  const zoomOut = button("−", "Zoom out", t => zoom.scaleBy(t, 0.5)).property("disabled", true);
+  const reset = button("⟲", "Reset zoom", t => zoom.transform(t, d3.zoomIdentity)).property("disabled", true);
 
   // iOS reports taps as "mouse" clicks, so remember what the finger/mouse really was.
   document.addEventListener("pointerdown", e => { lastPointer = e.pointerType; }, true);
